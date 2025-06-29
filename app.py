@@ -1,107 +1,115 @@
-# import streamlit as st
-# from langchain_google_genai import ChatGoogleGenerativeAI
-# from langchain_google_genai import  ChatGoogleGenerativeAI
-# from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplate,MessagesPlaceholder
-# from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-# from langchain_core.output_parsers import StrOutputParser
-# from langchain_core.runnables import RunnableLambda
-# from langchain_core.runnables import RunnablePassthrough
+import os
 
-# st.markdown('<h1 style="text-align: center; color: white;">Langchain Powered AI Conversational Data Science Tutor</h1>',unsafe_allow_html=True
-#             )
-
-
-# model=ChatGoogleGenerativeAI(model='gemini-2.0-flash-exp',api_key='AIzaSyBhxO_EeEMWhnltEaMCR4AvjNUw2qY7PKc')
-
-# chat_template=ChatPromptTemplate(
-#     messages=[
-#         SystemMessage(content='You are a data science tutor,' \
-#         'You will be given a question from a student and you will provide them with a detailed answer.' \
-#         'You will provide them with a code snippet if they ask you to do that'),
-#         HumanMessagePromptTemplate.from_template('{human_input}'),
-#         MessagesPlaceholder(variable_name='chat_history',optional=True)
-#     ])
-
-# output_parser=StrOutputParser()
-
-# memory_buffer={'history':[]}
-
-# def get_history_from_buffer(human_input):
-#     return memory_buffer['history']
-
-# runnable_get_history_from_buffer=RunnableLambda(get_history_from_buffer)
-
-# chain=RunnablePassthrough.assign(chat_history=runnable_get_history_from_buffer)|chat_template|model|output_parser
-
-# inp=st.chat_input('Enter your question')
-
-# if inp:
-#     query = {'human_input': inp}
-#     response = chain.invoke(query)
-    
-#     memory_buffer['history'].append(HumanMessage(content=query['human_input']))
-#     memory_buffer['history'].append(AIMessage(content=response))
-
-#     # Display both user and AI messages
-#     for message in memory_buffer['history']:
-#         if isinstance(message, HumanMessage):
-#             st.chat_message("user").write(message.content)
-#         elif isinstance(message, AIMessage):
-#             st.chat_message("assistant").write(message.content)
-    
-
-
+os.makedirs("chats_data", exist_ok=True)
 import streamlit as st
+import uuid
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_google_genai import  ChatGoogleGenerativeAI
-from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplate,MessagesPlaceholder
+from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplate, MessagesPlaceholder
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnableLambda
-from langchain_core.runnables import RunnablePassthrough
+from langchain_core.runnables import RunnableWithMessageHistory
+from langchain_community.chat_message_histories import SQLChatMessageHistory
 
-st.markdown('<h1 style="text-align: center; color: white;">Langchain Powered AI Conversational Data Science Tutor</h1>',unsafe_allow_html=True
-            )
+# Title
+st.markdown('<h1 style="text-align: center; color: white;">LangChain Powered AI Conversational Data Science Tutor</h1>', unsafe_allow_html=True)
 
+# Session ID for persistent memory
+if 'session_id' not in st.session_state:
+    st.session_state.session_id = str(uuid.uuid4())
 
-model=ChatGoogleGenerativeAI(model='gemini-2.0-flash-exp',api_key='AIzaSyBhxO_EeEMWhnltEaMCR4AvjNUw2qY7PKc')
+# Define how to load chat history from SQLite
+def get_session_message_history_from_db(session_id):
+    return SQLChatMessageHistory(
+        session_id=session_id,
+        connection_string="sqlite:///chats_data/sqlite.db"
+    )
 
-chat_template=ChatPromptTemplate(
+# Define model
+model = ChatGoogleGenerativeAI(
+    model='gemini-2.0-flash-exp',
+    api_key=os.environ["gemapi"] 
+)
+
+# Prompt template
+chat_template = ChatPromptTemplate(
     messages=[
-        SystemMessage(content='You are a data science tutor,' \
-        'You will be given a question from a student and you will provide them with a detailed answer.' \
-        'You will provide them with a code snippet if they ask you to do that'),
+        SystemMessage(content="You are a data science tutor. You will provide detailed answers and code snippets when asked."),
         HumanMessagePromptTemplate.from_template('{human_input}'),
-        MessagesPlaceholder(variable_name='chat_history',optional=True)
-    ])
+        MessagesPlaceholder(variable_name='chat_history', optional=True)
+    ]
+)
 
-output_parser=StrOutputParser()
+output_parser = StrOutputParser()
 
-memory_buffer={'history':[]}
+chain = RunnableWithMessageHistory(
+         chat_template | model | output_parser,
+         get_session_history=get_session_message_history_from_db,
+         input_messages_key="human_input",
+         history_messages_key="chat_history"
+     )
 
-def get_history_from_buffer(human_input):
-    return memory_buffer['history']
+st.sidebar.markdown(f"**💾 Session ID:** `{st.session_state.session_id}`")
+st.sidebar.caption("Save this ID to view this conversation again.")
+inp = st.chat_input("Ask me anything about data science")
+session_id_input = st.sidebar.text_input("🔍 Enter session ID to view history")
 
-runnable_get_history_from_buffer=RunnableLambda(get_history_from_buffer)
-
-chain=RunnablePassthrough.assign(chat_history=runnable_get_history_from_buffer)|chat_template|model|output_parser
-
-inp=st.chat_input('Enter your question')
+if session_id_input:
+    past_history = get_session_message_history_from_db(session_id_input)
+    st.sidebar.markdown("### Chat History")
+    for msg in past_history.messages:
+        role = "user" if isinstance(msg, HumanMessage) else "assistant"
+        st.sidebar.markdown(f"**{role.capitalize()}:** {msg.content}")
 
 if inp:
-    query = {'human_input': inp}
-    response = chain.invoke(query)
-    
-    memory_buffer['history'].append(HumanMessage(content=query['human_input']))
-    memory_buffer['history'].append(AIMessage(content=response))
+    # Append user message to DB
+    history = get_session_message_history_from_db(st.session_state.session_id)
+    history.add_user_message(inp)
 
-    # Display both user and AI messages
-    for message in memory_buffer['history']:
-        if isinstance(message, HumanMessage):
-            st.chat_message("user").write(message.content)
-        elif isinstance(message, AIMessage):
-            st.chat_message("assistant").write(message.content)
-    
 
+    # Invoke the model
+    response = chain.invoke(
+        {"human_input": inp},
+        config={"configurable": {"session_id": st.session_state.session_id}}
+    )
+
+    #Append assistant response to DB
+    history.add_ai_message(response)
+
+import sqlite3
+
+# Path to your SQLite database
+db_path = "chats_data/sqlite.db"
+
+# SQL to delete duplicate messages (keep the first occurrence)
+dedupe_sql = """
+DELETE FROM message_store
+WHERE rowid NOT IN (
+    SELECT MIN(rowid)
+    FROM message_store
+    GROUP BY session_id,message
+);
+"""
+
+# Run the deduplication
+def remove_duplicates():
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute(dedupe_sql)
+        conn.commit()
+
+    except sqlite3.Error as e:
+        conn.rollback()
+
+    finally:
+        conn.close()
+
+# Call the function
+remove_duplicates()
+
+# Display entire conversation from DB
+for msg in get_session_message_history_from_db(st.session_state.session_id).messages:
+    role = "user" if isinstance(msg, HumanMessage) else "assistant"
+    st.chat_message(role).write(msg.content)
 
 
